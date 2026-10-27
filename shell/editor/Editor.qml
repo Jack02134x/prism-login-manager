@@ -151,10 +151,15 @@ FloatingWindow {
     }
     Process {
         id: syncProc
-        command: [win.plmBin, "sync"]
+        property var extra: []
+        command: [win.plmBin, "sync"].concat(extra)
         stdout: StdioCollector { id: syncOut }
         stderr: StdioCollector { id: syncErr }
-        onExited: code => win.toast(code === 0 ? "Synced: " + (syncOut.text.split("\n").find(l => l.startsWith("wallpaper:")) ?? "done").replace(Config.home, "~") : "Sync failed: " + syncErr.text.trim(), code !== 0)
+        onExited: code => {
+            const lines = syncOut.text.split("\n").filter(l => l.trim() !== "");
+            const line = lines.find(l => l.startsWith("wallpaper:")) ?? lines[0] ?? "done";
+            win.toast(code === 0 ? line.replace(Config.home, "~") : "Sync failed: " + syncErr.text.trim().replace(/^plm: /, ""), code !== 0);
+        }
     }
 
     Shortcut {
@@ -446,7 +451,14 @@ FloatingWindow {
                 }
                 Component { id: themePage; PageTheme { onOpen: dir => win.openTheme(dir) } }
                 Component { id: layoutPage; PageLayout {} }
-                Component { id: bgPage; PageBackground { onSyncRequested: syncProc.running = true } }
+                Component { id: bgPage; PageBackground {
+                    onSyncRequested: args => {
+                        if (syncProc.running)
+                            return;
+                        syncProc.extra = args;
+                        syncProc.running = true;
+                    }
+                } }
                 Component { id: colorsPage; PageColors {} }
                 Component { id: typePage; PageType {} }
                 Component { id: loginPage; PageLogin {} }

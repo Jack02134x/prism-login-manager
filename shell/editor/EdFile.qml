@@ -9,7 +9,8 @@ import qs.common
 import qs.widgets
 
 // A file in the theme (a wallpaper, a video, a poster frame): type a path,
-// browse for one, or pick from the wallpaper gallery.
+// browse for one, or pick from the wallpaper gallery. With no `path` it only
+// reports the choice (picked) and shows `fileValue`.
 ColumnLayout {
     id: root
 
@@ -18,7 +19,18 @@ ColumnLayout {
     property string hint: ""
     // media | image
     property string accept: "media"
-    readonly property string value: String(Theme.get(path) ?? "")
+    readonly property bool bound: path !== ""
+    property string fileValue: ""
+    readonly property string value: bound ? String(Theme.get(path) ?? "") : fileValue
+
+    signal picked(string file)
+
+    function choose(file) {
+        if (bound)
+            Theme.set(path, file);
+        else
+            picked(file);
+    }
     property bool galleryOpen: false
 
     Layout.fillWidth: true
@@ -37,7 +49,7 @@ ColumnLayout {
             mono: true
             placeholder: "none"
             text: root.value
-            onCommitted: Theme.set(root.path, text.trim())
+            onCommitted: if (text.trim() !== root.value) root.choose(text.trim())
         }
         EdButton {
             icon: "folder_open"
@@ -55,7 +67,7 @@ ColumnLayout {
             }
         }
         EdButton {
-            visible: root.value !== ""
+            visible: root.bound && root.value !== ""
             icon: "close"
             tooltip: "Clear"
             onClicked: Theme.set(root.path, "")
@@ -71,7 +83,7 @@ ColumnLayout {
             onStreamFinished: {
                 const p = text.trim();
                 if (p !== "")
-                    Theme.set(root.path, p);
+                    root.choose(p);
             }
         }
         onExited: code => {
@@ -149,7 +161,7 @@ ColumnLayout {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: Theme.set(root.path, cell.modelData.path)
+                        onClicked: root.choose(cell.modelData.path)
                         EdTip {
                             text: Utils.fileName(cell.modelData.path)
                             show: parent.containsMouse

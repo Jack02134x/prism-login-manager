@@ -14,7 +14,8 @@ Singleton {
 
     readonly property string prismDir: Config.home + "/.config/quickshell"
     property var prismConfig: null
-    readonly property bool hasPrism: prismConfig !== null
+    // the same test `plm sync` and install.sh use: Prism has written its palette
+    property bool hasPrism: false
     readonly property var dirs: {
         const w = prismConfig?.wallpaper ?? {};
         const d = [w.dir, w.videoDir, Config.home + "/Pictures/Wallpapers", Config.home + "/Videos/Wallpapers", Config.home + "/wallpapers", Config.home + "/Pictures", Config.home + "/Videos"];
@@ -38,6 +39,13 @@ Singleton {
     function load() {
         if (!listProc.running)
             listProc.running = true;
+    }
+
+    FileView {
+        path: root.prismDir + "/.state/palette.json"
+        printErrors: false
+        onLoaded: root.hasPrism = true
+        onLoadFailed: root.hasPrism = false
     }
 
     FileView {

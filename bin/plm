@@ -442,7 +442,7 @@ def cmd_sync(args):
             die(f"no such file: {src}")
         wall, kind, source = src, media_kind(src), "manual"
     else:
-        wall, kind = prism_wallpaper() if PRISM.is_dir() else (None, None)
+        wall, kind = prism_wallpaper() if (PRISM / ".state" / "palette.json").exists() else (None, None)
         source = "prism" if wall else None
         if not wall and old.get("source") == "manual":
             wall, kind, source = None, old.get("kind"), "manual"  # keep the manual one

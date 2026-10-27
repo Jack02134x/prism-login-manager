@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import Quickshell
 import qs.common
 import qs.services
 
@@ -10,7 +9,8 @@ ColumnLayout {
     id: root
 
     readonly property string type: Theme.bg.type
-    signal syncRequested
+    // runs `plm sync` with these arguments
+    signal syncRequested(var args)
 
     spacing: 14
 
@@ -31,19 +31,39 @@ ColumnLayout {
     EdGroup {
         visible: root.type === "prism"
         title: "Your desktop"
-        note: Sync.available ? "Showing <b>" + Auth.user + "</b>'s synced " + Sync.kind + ". Each person sees their own once they've picked themselves at the login screen." : "Nothing synced for " + Auth.user + " yet. <b>plm sync</b> copies your Prism wallpaper (static or live), colours and avatar; <b>plm sync --wallpaper FILE</b> works without Prism. Until then the theme's own picture or shader is used."
+        note: {
+            const who = "<b>" + Auth.user + "</b>";
+            const now = Sync.available ? "Showing " + who + "'s " + (Sync.info?.source === "prism" ? "Prism " : "") + Sync.kind + ". " : "Nothing set for " + who + " yet, so the theme's own picture or animation shows. ";
+            const how = Gallery.hasPrism ? "Sync copies your Prism wallpaper (live ones too), colours and avatar." : "Pick a picture, GIF or video for your login screen.";
+            return now + how + " Everyone sees their own once they're picked at the login screen.";
+        }
+
+        // with Prism: follow its wallpaper
         RowLayout {
+            visible: Gallery.hasPrism
             spacing: 8
             EdButton {
                 icon: "sync"
                 text: "Sync now"
                 primary: true
-                onClicked: root.syncRequested()
+                onClicked: root.syncRequested([])
             }
             EdButton {
                 icon: "creation"
                 text: "Follow Prism automatically"
-                onClicked: Quickshell.execDetached([Config.env("PLM_BIN", "plm"), "sync", "--auto"])
+                onClicked: root.syncRequested(["--auto"])
+            }
+        }
+
+        // without Prism: choose one
+        EdFile {
+            visible: !Gallery.hasPrism
+            label: "My wallpaper"
+            hint: "copied for the login screen"
+            fileValue: Sync.info?.source === "manual" ? (Sync.info?.origin?.wallpaper ?? "").split("|")[0] : ""
+            onPicked: file => {
+                if (file !== "")
+                    root.syncRequested(["--wallpaper", file]);
             }
         }
     }
