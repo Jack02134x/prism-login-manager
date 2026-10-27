@@ -135,8 +135,7 @@ mytheme/
   assets/         pictures and videos it uses
 ```
 
-Themes are looked up by folder name in `~/.local/share/plm/themes` (yours, in test mode and the
-editor), then `/etc/plm/themes` (installed), then `/usr/share/plm/themes` (bundled).
+Themes are looked up by folder name in `~/.local/share/plm/themes`, then `/etc/plm/themes` (installed), then `/usr/share/plm/themes` (bundled).
 
 ```jsonc
 {
