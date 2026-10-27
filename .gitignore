@@ -1,0 +1,4 @@
+ai_communication.md
+__pycache__/
+*.pyc
+/build/
