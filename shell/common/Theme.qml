@@ -258,10 +258,12 @@ Singleton {
         return (colourful.length >= 2 ? colourful : scored).sort((a, b) => b.s - a.s).map(x => vivid(x.c));
     }
 
+    // a sync made with `plm sync --wallpaper` (no Prism) has a picture but no palette
+    readonly property bool syncPalette: Sync.available && ((Sync.palette?.accents?.length ?? 0) >= 8 || Sync.gradient.length >= 3)
     readonly property string paletteSource: {
         const s = col.source;
-        if (s === "prism" || (s === "auto" && Sync.available && Config.prismSync))
-            return Sync.available ? "prism" : "custom";
+        if (s === "prism" || (s === "auto" && syncPalette && Config.prismSync))
+            return syncPalette ? "prism" : (wallColors.length >= 1 ? "wallpaper" : "custom");
         if (s === "wallpaper" || s === "auto")
             return wallColors.length >= 1 ? "wallpaper" : "custom";
         return "custom";
