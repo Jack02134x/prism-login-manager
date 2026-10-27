@@ -1,0 +1,31 @@
+{
+    "name": "Prism",
+    "author": "PLM",
+    "description": "Prism's lock screen as a login screen. Follows your Prism desktop (wallpaper, live wallpaper and colours) after `plm sync`; otherwise light through glass.",
+    "layout": "prism",
+    "background": {
+        "type": "prism",
+        "shader": "prism",
+        "blur": 0.55,
+        "dim": 0.32,
+        "zoom": 1.04,
+        "parallax": 0.5,
+        "focusBlur": 0.4,
+        "colors": ["#0b0d14", "#1a1230", "#081e26"]
+    },
+    "colors": {
+        "source": "auto",
+        "accent": "#82d5ca",
+        "accent2": "#aecae6",
+        "accent3": "#cbb7ff"
+    },
+    "clock": {
+        "size": 210,
+        "gradient": true
+    },
+    "effects": {
+        "aurora": 0.35,
+        "vignette": 0.5,
+        "intro": "rise"
+    }
+}

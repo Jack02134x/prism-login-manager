@@ -1,0 +1,44 @@
+{
+    "name": "Midnight",
+    "author": "PLM",
+    "description": "Quiet: a slow mesh gradient, a few stars, a clock in the corner and one line to type on.",
+    "layout": "minimal",
+    "background": {
+        "type": "shader",
+        "shader": "mesh",
+        "dim": 0.15,
+        "colors": ["#05060c", "#141030", "#0a1a26"]
+    },
+    "colors": {
+        "source": "custom",
+        "accent": "#9db4ff",
+        "accent2": "#c3a6ff",
+        "accent3": "#ffb3d9",
+        "surfaceAlpha": 0.25
+    },
+    "clock": {
+        "size": 230,
+        "weight": 300,
+        "gradient": true,
+        "dateFormat": "dddd d MMMM",
+        "dateSpacing": 3
+    },
+    "input": {
+        "style": "underline",
+        "mask": "•"
+    },
+    "avatar": {
+        "ring": "accent",
+        "ringWidth": 2,
+        "spin": false
+    },
+    "effects": {
+        "particles": "stars",
+        "particleCount": 90,
+        "vignette": 0.6,
+        "grain": 0.12,
+        "intro": "fade",
+        "introMs": 1600,
+        "outro": "fade"
+    }
+}

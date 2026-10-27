@@ -1,0 +1,34 @@
+{
+    "theme": "prism",
+    "compositor": "auto",
+    "keyboard": {
+        "layout": "us",
+        "variant": "",
+        "options": "",
+        "numlock": false
+    },
+    "monitor": "",
+    "defaultUser": "",
+    "defaultSession": "",
+    "remember": true,
+    "users": {
+        "showList": true,
+        "hidden": [],
+        "allowOther": true
+    },
+    "sessions": {
+        "hidden": [],
+        "shell": false,
+        "extra": []
+    },
+    "power": {
+        "suspend": true,
+        "hibernate": false,
+        "reboot": true,
+        "poweroff": true
+    },
+    "clock24h": true,
+    "ambientAfter": 45,
+    "prismSync": true,
+    "env": []
+}

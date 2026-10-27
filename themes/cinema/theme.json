@@ -1,0 +1,35 @@
+{
+    "name": "Cinema",
+    "author": "PLM",
+    "description": "Everyone gets a card with their own desktop on it. Behind, the selected person's live wallpaper plays. Best after each user runs plm sync.",
+    "layout": "coverflow",
+    "background": {
+        "type": "prism",
+        "shader": "prism",
+        "blur": 0.75,
+        "dim": 0.45,
+        "zoom": 1.08,
+        "parallax": 0.6,
+        "colors": ["#08080c", "#1a1020", "#0c1418"]
+    },
+    "colors": {
+        "source": "auto",
+        "accent": "#ffd38a",
+        "accent2": "#ff9fb2",
+        "accent3": "#b5a8ff"
+    },
+    "clock": {
+        "size": 180,
+        "weight": 700
+    },
+    "input": {
+        "style": "solid",
+        "width": 340
+    },
+    "effects": {
+        "vignette": 0.7,
+        "grain": 0.08,
+        "intro": "zoom",
+        "introMs": 1200
+    }
+}

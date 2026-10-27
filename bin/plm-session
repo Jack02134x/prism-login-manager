@@ -1,0 +1,71 @@
+#!/bin/sh
+# plm-session: what greetd runs (as the greeter user). Starts the PLM login
+# screen inside a small compositor: Hyprland, sway or cage, whichever plm.json's
+# "compositor" says ("auto" takes the first one installed, in that order).
+#
+# Environment: PLM_SHARE (found next to this script), PLM_CONFIG (/etc/plm/plm.json).
+
+# PLM's files: /usr/share/plm when installed (or <prefix>/share/plm), the repo from source
+here=$(dirname "$(readlink -f "$0")")
+SHARE=${PLM_SHARE:-}
+for d in "$here/../share/plm" "$here/.." /usr/share/plm; do
+    [ -n "$SHARE" ] && break
+    [ -f "$d/shell/shell.qml" ] && SHARE=$(cd "$d" && pwd)
+done
+CONF=${PLM_CONFIG:-/etc/plm/plm.json}
+export PLM_SHARE=$SHARE PLM_CONFIG=$CONF PLM_MODE=greeter
+
+# read a setting from plm.json (jq if there is one, else python, else the default)
+get() {
+    if command -v jq >/dev/null 2>&1; then
+        v=$(jq -r "$1 // empty" "$CONF" 2>/dev/null)
+    elif command -v python3 >/dev/null 2>&1; then
+        v=$(python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+for k in sys.argv[2].lstrip(".").split("."):
+    d=d.get(k) if isinstance(d,dict) else None
+print("" if d is None else (str(d).lower() if isinstance(d,bool) else d))' "$CONF" "$1" 2>/dev/null)
+    else
+        v=
+    fi
+    [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$2"
+}
+
+export PLM_KB_LAYOUT="$(get .keyboard.layout us)"
+export PLM_KB_VARIANT="$(get .keyboard.variant '')"
+export PLM_KB_OPTIONS="$(get .keyboard.options '')"
+[ "$(get .keyboard.numlock false)" = true ] && export PLM_NUMLOCK=1
+export XDG_SESSION_TYPE=wayland
+export QT_QPA_PLATFORM=wayland
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+
+comp=$(get .compositor auto)
+if [ "$comp" = auto ]; then
+    for c in Hyprland sway cage; do
+        if command -v "$c" >/dev/null 2>&1; then comp=$c; break; fi
+    done
+fi
+
+log=${XDG_RUNTIME_DIR:-/tmp}/plm-session.log
+echo "plm-session: $(date) compositor=$comp" >"$log"
+
+case "$comp" in
+Hyprland | hyprland)
+    # start-hyprland is Hyprland's crash watchdog; it ends when Hyprland exits normally
+    if command -v start-hyprland >/dev/null 2>&1; then
+        exec start-hyprland -- -c "$SHARE/data/compositor/hyprland.lua" >>"$log" 2>&1
+    fi
+    exec Hyprland -c "$SHARE/data/compositor/hyprland.lua" >>"$log" 2>&1
+    ;;
+sway)
+    exec sway --unsupported-gpu -c "$SHARE/data/compositor/sway.conf" >>"$log" 2>&1
+    ;;
+cage)
+    # cage has no layer shell: PLM uses one full-screen window instead
+    PLM_WINDOW=floating exec cage -s -d -- quickshell -p "$SHARE/shell" >>"$log" 2>&1
+    ;;
+*)
+    echo "plm-session: no compositor found (install Hyprland, sway or cage)" >>"$log"
+    exit 1
+    ;;
+esac

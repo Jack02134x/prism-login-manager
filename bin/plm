@@ -1,0 +1,726 @@
+#!/usr/bin/env python3
+"""plm: Prism Login Manager.
+
+Try it                      plm test [--theme ID|DIR] [--fullscreen] [--screenshot FILE]
+Edit themes                 plm editor [ID|DIR]
+Themes                      plm themes
+                            plm theme set ID                       (root)
+                            plm theme install DIR [--activate]     (root)
+                            plm theme remove ID                    (root)
+                            plm theme new NAME [--from ID]
+                            plm theme export ID FILE.tar.gz
+                            plm theme import FILE.tar.gz
+Your desktop at login       plm sync [--wallpaper FILE] [--avatar FILE] [--auto | --no-auto] [--quiet]
+Settings                    plm config [KEY [VALUE]]               (setting needs root)
+Set up greetd               plm setup [--enable] [--dry-run] [--yes]  (root)
+Check everything            plm doctor
+"""
+
+import argparse
+import datetime
+import json
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+HOME = Path.home()
+USER = pwd.getpwuid(os.getuid()).pw_name
+CONFIG = Path(os.environ.get("PLM_CONFIG", "/etc/plm/plm.json"))
+SYSTEM_THEMES = Path("/etc/plm/themes")
+STATE = Path("/var/lib/plm")
+USER_THEMES = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share")) / "plm" / "themes"
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "plm"
+PRISM = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "quickshell"
+GREETD = Path("/etc/greetd/config.toml")
+QUIET = False
+
+
+# ---- where PLM lives ------------------------------------------------------------
+
+def share_dir():
+    """/usr/share/plm when installed, the repository when run from source."""
+    here = Path(__file__).resolve().parent
+    for d in (os.environ.get("PLM_SHARE"), here.parent, here.parent / "share" / "plm", "/usr/share/plm"):
+        if d and (Path(d) / "shell" / "shell.qml").exists():
+            return Path(d)
+    die("can't find PLM's files (set PLM_SHARE)")
+
+
+SHARE = None  # set in main()
+
+
+def say(*a):
+    if not QUIET:
+        print(*a)
+
+
+def warn(*a):
+    print("plm:", *a, file=sys.stderr)
+
+
+def die(*a, code=1):
+    warn(*a)
+    sys.exit(code)
+
+
+def need_root(what):
+    if os.geteuid() != 0:
+        die(f"{what} needs root: run it with sudo (or pkexec)")
+
+
+def run(cmd, check=False, **kw):
+    try:
+        return subprocess.run(cmd, check=check, text=True, capture_output=True, **kw)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: not found")
+
+
+def have(cmd):
+    return shutil.which(cmd) is not None
+
+
+def load_json(path, default=None):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, data, mode=0o644):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=4) + "\n")
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+# ---- themes ---------------------------------------------------------------------
+
+def theme_dirs(include_user=True):
+    dirs = ([USER_THEMES] if include_user else []) + [SYSTEM_THEMES, SHARE / "themes"]
+    return [d for d in dirs if d.is_dir()]
+
+
+def all_themes(include_user=True):
+    seen, out = set(), []
+    for d in theme_dirs(include_user):
+        for t in sorted(d.glob("*/theme.json")):
+            tid = t.parent.name
+            if tid in seen:
+                continue
+            seen.add(tid)
+            data = load_json(t, {}) or {}
+            where = "yours" if d == USER_THEMES else "installed" if d == SYSTEM_THEMES else "bundled"
+            out.append({"id": tid, "dir": t.parent, "name": data.get("name", tid), "layout": data.get("layout", "prism"),
+                        "description": data.get("description", ""), "where": where})
+    return out
+
+
+def find_theme(ref, include_user=True):
+    """A theme id or folder -> its folder."""
+    p = Path(ref).expanduser()
+    if (p / "theme.json").exists():
+        return p.resolve()
+    if p.name == "theme.json" and p.exists():
+        return p.parent.resolve()
+    for t in all_themes(include_user):
+        if t["id"] == ref:
+            return t["dir"]
+    die(f"no theme '{ref}' (see `plm themes`)")
+
+
+def slug(s):
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "theme"
+
+
+ASSET_KEYS = [("background", "source"), ("background", "fallback")]
+
+
+def bundle_assets(theme_dir, data):
+    """Copy files a theme points to by absolute path into its assets/ folder."""
+    changed = False
+    for sect, key in ASSET_KEYS:
+        v = (data.get(sect) or {}).get(key, "")
+        if not v:
+            continue
+        p = Path(v).expanduser()
+        if p.is_absolute() and p.is_file() and not str(p).startswith(str(theme_dir) + "/"):
+            dst = theme_dir / "assets" / p.name
+            dst.parent.mkdir(exist_ok=True)
+            shutil.copy2(p, dst)
+            os.chmod(dst, 0o644)
+            data[sect][key] = f"assets/{p.name}"
+            changed = True
+    return changed
+
+
+def cmd_themes(args):
+    active = (load_json(CONFIG, {}) or {}).get("theme", "prism")
+    for t in all_themes():
+        mark = "*" if t["id"] == active else " "
+        print(f"{mark} {t['id']:<14} {t['name']:<16} {t['layout']:<10} {t['where']:<9} {t['dir']}")
+    print("\n* = active (plm.json). Try one: plm test --theme ID")
+
+
+def cmd_theme(args):
+    a = args.theme_args
+    if not a:
+        die("plm theme set|install|remove|new|export|import ... (see plm --help)")
+    sub, rest = a[0], a[1:]
+    if sub == "set":
+        need_root("plm theme set")
+        if not rest:
+            die("plm theme set ID")
+        find_theme(rest[0], include_user=False)
+        set_config("theme", rest[0])
+        say(f"login theme: {rest[0]}")
+    elif sub == "install":
+        need_root("plm theme install")
+        if not rest:
+            die("plm theme install DIR [--activate] [--id ID]")
+        src = find_theme(rest[0])
+        tid = rest[rest.index("--id") + 1] if "--id" in rest else src.name
+        tid = slug(tid)
+        dst = SYSTEM_THEMES / tid
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst, ignore=shutil.ignore_patterns("*.tmp", ".git"))
+        data = load_json(dst / "theme.json", {})
+        if bundle_assets(dst, data):
+            write_json(dst / "theme.json", data)
+        for root_, dirs, files in os.walk(dst):
+            os.chmod(root_, 0o755)
+            for f in files:
+                os.chmod(Path(root_) / f, 0o644)
+        say(f"installed {tid} -> {dst}")
+        if "--activate" in rest:
+            set_config("theme", tid)
+            say(f"login theme: {tid}")
+    elif sub == "remove":
+        need_root("plm theme remove")
+        if not rest:
+            die("plm theme remove ID")
+        dst = SYSTEM_THEMES / rest[0]
+        if not dst.is_dir():
+            die(f"{rest[0]} isn't installed in {SYSTEM_THEMES} (bundled themes can't be removed)")
+        shutil.rmtree(dst)
+        say(f"removed {rest[0]}")
+    elif sub == "new":
+        if not rest:
+            die("plm theme new NAME [--from ID]")
+        name = rest[0]
+        src = find_theme(rest[rest.index("--from") + 1]) if "--from" in rest else find_theme("prism")
+        dst = USER_THEMES / slug(name)
+        if dst.exists():
+            die(f"{dst} already exists")
+        shutil.copytree(src, dst)
+        data = load_json(dst / "theme.json", {})
+        data["name"] = name
+        data["author"] = USER
+        write_json(dst / "theme.json", data)
+        say(f"created {dst}\nedit it: plm editor {dst.name}")
+    elif sub == "export":
+        if len(rest) < 2:
+            die("plm theme export ID FILE.tar.gz")
+        src = find_theme(rest[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = Path(tmp) / src.name
+            shutil.copytree(src, stage)
+            data = load_json(stage / "theme.json", {})
+            if bundle_assets(stage, data):
+                write_json(stage / "theme.json", data)
+            with tarfile.open(rest[1], "w:gz") as tar:
+                tar.add(stage, arcname=src.name)
+        say(f"exported {src.name} -> {rest[1]}")
+    elif sub == "import":
+        if not rest:
+            die("plm theme import FILE.tar.gz")
+        USER_THEMES.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(rest[0]) as tar:
+            members = tar.getmembers()
+            tops = {m.name.split("/")[0] for m in members}
+            if len(tops) != 1:
+                die("not a PLM theme archive (expected one folder)")
+            top = tops.pop()
+            if not any(m.name == f"{top}/theme.json" for m in members):
+                die("not a PLM theme archive (no theme.json)")
+            tar.extractall(USER_THEMES, filter="data")
+        say(f"imported {top} -> {USER_THEMES / top}\ntry it: plm test --theme {top}")
+    else:
+        die(f"unknown: plm theme {sub}")
+
+
+# ---- settings -------------------------------------------------------------------
+
+def get_path(d, key):
+    for k in key.split("."):
+        if not isinstance(d, dict) or k not in d:
+            return None
+        d = d[k]
+    return d
+
+
+def set_config(key, value):
+    data = load_json(CONFIG, None)
+    if data is None:
+        data = load_json(SHARE / "data" / "plm.json", {}) or {}
+    cur = data
+    keys = key.split(".")
+    for k in keys[:-1]:
+        cur = cur.setdefault(k, {})
+    cur[keys[-1]] = value
+    write_json(CONFIG, data)
+
+
+def cmd_config(args):
+    data = load_json(CONFIG, None)
+    if data is None:
+        data = load_json(SHARE / "data" / "plm.json", {})
+        warn(f"{CONFIG} doesn't exist yet; showing the defaults")
+    if not args.key:
+        print(json.dumps(data, indent=4))
+        return
+    if args.value is None:
+        v = get_path(data, args.key)
+        print(json.dumps(v) if not isinstance(v, str) else v)
+        return
+    need_root("changing plm.json")
+    try:
+        value = json.loads(args.value)
+    except ValueError:
+        value = args.value
+    set_config(args.key, value)
+    say(f"{args.key} = {json.dumps(value)}")
+
+
+# ---- running it -----------------------------------------------------------------
+
+def quickshell():
+    for q in ("quickshell", "qs"):
+        if have(q):
+            return q
+    die("quickshell isn't installed")
+
+
+def launch(mode, theme=None, extra_env=None, wait=True):
+    env = dict(os.environ, PLM_MODE=mode, PLM_SHARE=str(SHARE), PLM_BIN=str(Path(__file__).resolve()))
+    if theme:
+        env["PLM_THEME"] = str(find_theme(theme))
+    env.update(extra_env or {})
+    cmd = [quickshell(), "-p", str(SHARE / "shell")]
+    if wait:
+        return subprocess.call(cmd, env=env)
+    subprocess.Popen(cmd, env=env, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return 0
+
+
+def cmd_test(args):
+    env = {}
+    if args.fullscreen:
+        env["PLM_WINDOW"] = "layer"
+    if args.screenshot:
+        env["PLM_SCREENSHOT"] = str(Path(args.screenshot).expanduser().resolve())
+        env["PLM_SCREENSHOT_DELAY"] = str(args.delay)
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        die("plm test needs a Wayland session")
+    say("PLM test mode: any password logs in (nothing really starts), \"fail\" is wrong, \"2fa\" asks for a code."
+        "\nCtrl+Q quits, F5 reloads the theme.")
+    sys.exit(launch("test", args.theme, env))
+
+
+def cmd_editor(args):
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        die("plm editor needs a Wayland session")
+    sys.exit(launch("editor", args.theme))
+
+
+# ---- sync: your desktop at the login screen -------------------------------------
+
+def sync_root():
+    """Where the greeter reads per-user data; ~/.cache/plm for test mode when PLM isn't set up."""
+    sysdir = STATE / "users" / USER
+    if sysdir.is_dir() and os.access(sysdir, os.W_OK):
+        return sysdir, True
+    return CACHE / "users" / USER, False
+
+
+def media_kind(p):
+    s = str(p).lower()
+    if re.search(r"\.(mp4|webm|mkv|mov|m4v|avi)$", s):
+        return "video"
+    if s.endswith(".gif"):
+        return "gif"
+    return "image"
+
+
+def prism_wallpaper():
+    """(path, kind) of the Prism desktop's current wallpaper, or (None, None)."""
+    pal = load_json(PRISM / ".state" / "palette.json", {}) or {}
+    cfg = load_json(PRISM / "config.json", {}) or {}
+    wall = pal.get("wallpaper") or ""
+    frame = PRISM / ".cache" / "live-frame.png"
+    if wall and Path(wall).name == "live-frame.png":
+        # a live wallpaper: the video (or gif) behind that frame
+        cur = PRISM / ".cache" / "live" / "current.json"
+        info = load_json(cur, {}) or {}
+        src = Path(info.get("source", ""))
+        fresh = cur.exists() and frame.exists() and cur.stat().st_mtime >= frame.stat().st_mtime - 120
+        if fresh and src.is_file():
+            # prefer Prism's copy sized for this screen (much smaller than a 4K original)
+            copies = sorted((PRISM / ".cache" / "live").glob(f"{src.stem[:40]}-*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+            copies = [c for c in copies if not c.name.endswith(".part.mp4")]
+            return (copies[0] if copies else src), "video"
+        name_file = Path(cfg.get("wallpaper", {}).get("nameFile", "") or "/nonexistent")
+        video_dir = Path(cfg.get("wallpaper", {}).get("videoDir", "") or "/nonexistent")
+        if name_file.is_file():
+            gif = video_dir / (name_file.read_text().strip() + ".gif")
+            if gif.is_file():
+                return gif, "gif"
+        return (frame, "image") if frame.exists() else (None, None)
+    if wall and Path(wall).is_file():
+        return Path(wall), media_kind(wall)
+    copy = Path(cfg.get("wallpaper", {}).get("copyTo", "") or "/nonexistent")
+    if copy.is_file():
+        return copy, "image"
+    return None, None
+
+
+def make_poster(src, kind, dst):
+    """A ~1280px JPEG of `src` (first frame for videos/gifs). True when it worked."""
+    dst.unlink(missing_ok=True)
+    if kind == "video":
+        if have("ffmpegthumbnailer") and run(["ffmpegthumbnailer", "-i", str(src), "-o", str(dst), "-s", "1280", "-t", "15%", "-q", "8"]).returncode == 0:
+            return dst.exists()
+        if have("ffmpeg"):
+            run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", "1", "-i", str(src), "-frames:v", "1", "-vf", "scale=1280:-2", str(dst)])
+            return dst.exists()
+        return False
+    for tool in ("magick", "convert"):
+        if have(tool):
+            run([tool, f"{src}[0]", "-resize", "1280x1280>", "-quality", "86", str(dst)])
+            if dst.exists():
+                return True
+    if have("ffmpeg"):
+        run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(src), "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", str(dst)])
+    return dst.exists()
+
+
+def copy_if_changed(src, dst, info, key):
+    st = src.stat()
+    sig = f"{src.resolve()}|{st.st_size}|{int(st.st_mtime)}"
+    if info.get(key) == sig and dst.exists():
+        return sig, False
+    tmp = dst.with_name(dst.name + ".tmp")
+    shutil.copyfile(src, tmp)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, dst)
+    return sig, True
+
+
+def cmd_sync(args):
+    global QUIET
+    QUIET = args.quiet
+    if args.auto or args.no_auto:
+        return auto_sync(args.auto)
+    dest, system = sync_root()
+    dest.mkdir(parents=True, exist_ok=True)
+    old = load_json(dest / "prism.json", {}) or {}
+    info = {"version": 1, "user": USER, "origin": old.get("origin", {})}
+    origin = info["origin"]
+
+    # wallpaper: --wallpaper, else the Prism desktop's, else keep what's there
+    if args.wallpaper:
+        src = Path(args.wallpaper).expanduser()
+        if not src.is_file():
+            die(f"no such file: {src}")
+        wall, kind, source = src, media_kind(src), "manual"
+    else:
+        wall, kind = prism_wallpaper() if PRISM.is_dir() else (None, None)
+        source = "prism" if wall else None
+        if not wall and old.get("source") == "manual":
+            wall, kind, source = None, old.get("kind"), "manual"  # keep the manual one
+    if wall:
+        ext = wall.suffix.lower() or ".img"
+        dst = dest / f"wallpaper{ext}"
+        for stale in dest.glob("wallpaper.*"):
+            if stale != dst and not stale.name.endswith(".tmp"):
+                stale.unlink()
+        origin["wallpaper"], changed = copy_if_changed(wall, dst, origin, "wallpaper")
+        if changed or not (dest / "poster.jpg").exists():
+            if not make_poster(dst, kind, dest / "poster.jpg"):
+                warn("couldn't make a poster frame (install ffmpegthumbnailer or imagemagick)")
+        info.update(wallpaper=dst.name, kind=kind, poster="poster.jpg" if (dest / "poster.jpg").exists() else "", source=source)
+        say(f"wallpaper: {wall} ({kind}){'' if changed else ', unchanged'}")
+    elif old.get("wallpaper"):
+        info.update({k: old[k] for k in ("wallpaper", "kind", "poster", "source") if k in old})
+    else:
+        say("wallpaper: none (no Prism desktop found; use --wallpaper FILE to pick one)")
+
+    # palette from Prism
+    pal = load_json(PRISM / ".state" / "palette.json", None) if PRISM.is_dir() and source != "manual" else None
+    if pal:
+        info["palette"] = {k: pal.get(k) for k in ("mode", "colors", "accents", "gradient") if k in pal}
+        say(f"colours: {', '.join(pal.get('gradient', []))}")
+    elif old.get("palette") and source != "manual":
+        info["palette"] = old["palette"]
+
+    # avatar: --avatar, Prism's config, ~/.face
+    cfg = load_json(PRISM / "config.json", {}) or {}
+    cands = [args.avatar, cfg.get("user", {}).get("avatar"), HOME / ".face", HOME / ".face.icon"]
+    av = next((Path(c).expanduser() for c in cands if c and Path(c).expanduser().is_file()), None)
+    if av:
+        origin["avatar"], _ = copy_if_changed(av, dest / "avatar", origin, "avatar")
+        say(f"avatar: {av}")
+
+    write_json(dest / "prism.json", info)
+    os.chmod(dest, 0o755)
+    if not system:
+        say(f"\nsaved to {dest} (test mode only: run `sudo plm setup` so the real login screen can read it)")
+
+
+def auto_sync(on):
+    unit_dir = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "systemd" / "user"
+    if on:
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        plm = shutil.which("plm") or str(Path(__file__).resolve())
+        for name in ("plm-sync.path", "plm-sync.service"):
+            text = (SHARE / "data" / "systemd" / name).read_text().replace("/usr/bin/plm", plm)
+            (unit_dir / name).write_text(text)
+        run(["systemctl", "--user", "daemon-reload"])
+        r = run(["systemctl", "--user", "enable", "--now", "plm-sync.path"])
+        if r.returncode:
+            die(r.stderr.strip())
+        say("auto-sync on: the login screen follows your wallpaper, colours and avatar")
+    else:
+        run(["systemctl", "--user", "disable", "--now", "plm-sync.path"])
+        for name in ("plm-sync.path", "plm-sync.service"):
+            (unit_dir / name).unlink(missing_ok=True)
+        run(["systemctl", "--user", "daemon-reload"])
+        say("auto-sync off")
+
+
+# ---- setup (root) ---------------------------------------------------------------
+
+def human_users():
+    lo, hi = 1000, 60000
+    try:
+        for line in Path("/etc/login.defs").read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] == "UID_MIN":
+                lo = int(parts[1])
+            if len(parts) == 2 and parts[0] == "UID_MAX":
+                hi = int(parts[1])
+    except (OSError, ValueError):
+        pass
+    return [p for p in pwd.getpwall() if lo <= p.pw_uid <= hi and not p.pw_shell.endswith(("nologin", "false"))]
+
+
+def cmd_setup(args):
+    dry = args.dry_run
+    if not dry:
+        need_root("plm setup")
+    steps = []
+
+    def step(desc, fn):
+        steps.append(desc)
+        if dry:
+            print("  would:", desc)
+        else:
+            fn()
+            print("  done: ", desc)
+
+    for prog, pkg in (("greetd", "greetd"), ("quickshell", "quickshell")):
+        if not have(prog) and not Path(f"/usr/bin/{prog}").exists():
+            (warn if dry else die)(f"{prog} isn't installed (Arch: pacman -S {pkg})")
+
+    try:
+        pwd.getpwnam("greeter")
+    except KeyError:
+        step("create the 'greeter' system user", lambda: subprocess.run(
+            ["useradd", "-r", "-M", "-d", "/var/lib/greetd", "-s", "/usr/bin/nologin", "-G", "video", "greeter"], check=True))
+
+    def greeter_ids():
+        g = pwd.getpwnam("greeter")
+        return g.pw_uid, g.pw_gid
+
+    def make_state():
+        STATE.mkdir(parents=True, exist_ok=True)
+        uid, gid = greeter_ids()
+        os.chown(STATE, uid, gid)
+        os.chmod(STATE, 0o755)
+        users = STATE / "users"
+        users.mkdir(exist_ok=True)
+        os.chown(users, 0, 0)
+        os.chmod(users, 0o755)
+        for p in human_users():
+            d = users / p.pw_name
+            d.mkdir(exist_ok=True)
+            os.chown(d, p.pw_uid, p.pw_gid)
+            os.chmod(d, 0o755)
+
+    step(f"make {STATE} (greeter's memory) and a sync folder for each user", make_state)
+
+    if not CONFIG.exists():
+        def make_config():
+            CONFIG.parent.mkdir(parents=True, exist_ok=True)
+            SYSTEM_THEMES.mkdir(exist_ok=True)
+            data = load_json(SHARE / "data" / "plm.json", {})
+            layout = keyboard_layout()
+            if layout:
+                data.setdefault("keyboard", {})["layout"] = layout
+            write_json(CONFIG, data)
+        step(f"write {CONFIG}", make_config)
+    else:
+        SYSTEM_THEMES.mkdir(parents=True, exist_ok=True) if not dry else None
+
+    ours = (SHARE / "data" / "greetd.toml").read_text()
+    if not GREETD.exists() or "plm-session" not in GREETD.read_text():
+        def write_greetd():
+            GREETD.parent.mkdir(parents=True, exist_ok=True)
+            if GREETD.exists():
+                bak = GREETD.with_name(f"config.toml.bak-plm-{datetime.date.today()}")
+                shutil.copy2(GREETD, bak)
+                print(f"         (old config kept as {bak})")
+            GREETD.write_text(ours)
+        step(f"point greetd at plm-session ({GREETD})", write_greetd)
+
+    if args.enable:
+        current = Path("/etc/systemd/system/display-manager.service")
+        if current.exists() or current.is_symlink():
+            dm = os.path.basename(os.path.realpath(current))
+            if dm != "greetd.service":
+                def switch_off():
+                    # remembered so the uninstaller can switch back
+                    (CONFIG.parent / ".previous-dm").write_text(dm + "\n")
+                    subprocess.run(["systemctl", "disable", dm], check=True)
+                step(f"disable the current display manager ({dm})", switch_off)
+        step("enable greetd (the login screen appears at next boot)", lambda: subprocess.run(["systemctl", "enable", "greetd.service"], check=True))
+        if Path("/etc/systemd/system/getty.target.wants/getty@tty1.service").exists():
+            print("  note: greetd uses tty1. If you start Hyprland from your shell profile on tty1, that keeps working on other ttys.")
+    elif not dry:
+        print("\nPLM is set up. To switch to it at the next boot: sudo plm setup --enable")
+    if dry:
+        print("\n(dry run: nothing changed)")
+    else:
+        print("\nEach user can now run `plm sync` (or `plm sync --auto`) to bring their wallpaper and avatar to the login screen.")
+
+
+def keyboard_layout():
+    r = run(["localectl", "status"])
+    m = re.search(r"X11 Layout:\s*(\S+)", r.stdout or "")
+    return m.group(1) if m else ""
+
+
+# ---- doctor ---------------------------------------------------------------------
+
+def cmd_doctor(args):
+    ok = True
+
+    def check(cond, good, bad, fatal=True):
+        nonlocal ok
+        print(("  ok   " if cond else ("  FAIL " if fatal else "  warn ")) + (good if cond else bad))
+        if not cond and fatal:
+            ok = False
+
+    print("PLM doctor\n")
+    check(have("quickshell"), "quickshell installed", "quickshell missing")
+    check(Path("/usr/lib/qt6/qml/Quickshell/Services/Greetd").is_dir(), "Quickshell has greetd support", "Quickshell built without greetd support")
+    check(Path("/usr/lib/qt6/qml/QtMultimedia").is_dir() and any(Path("/usr/lib/qt6/plugins/multimedia").glob("*ffmpeg*")),
+          "Qt Multimedia + FFmpeg backend (live wallpapers)", "qt6-multimedia / qt6-multimedia-ffmpeg missing: video backgrounds won't play", fatal=False)
+    check(have("greetd") or Path("/usr/bin/greetd").exists(), "greetd installed", "greetd missing (pacman -S greetd)")
+    comps = [c for c in ("Hyprland", "sway", "cage") if have(c)]
+    check(bool(comps), "compositor: " + ", ".join(comps), "no compositor for the greeter (Hyprland, sway or cage)")
+    check(have("jq") or have("python3"), "plm-session can read plm.json", "install jq or python3 for plm-session", fatal=False)
+    try:
+        pwd.getpwnam("greeter")
+        check(True, "greeter user exists", "")
+    except KeyError:
+        check(False, "", "no 'greeter' user (sudo plm setup)")
+    check(CONFIG.exists(), f"{CONFIG}", f"{CONFIG} missing (sudo plm setup)")
+    g = GREETD.read_text() if GREETD.exists() else ""
+    check("plm-session" in g, "greetd runs plm-session", f"{GREETD} doesn't use plm-session (sudo plm setup)")
+    en = run(["systemctl", "is-enabled", "greetd.service"]).stdout.strip()
+    check(en == "enabled", "greetd enabled", f"greetd not enabled ({en or 'unknown'}): sudo plm setup --enable", fatal=False)
+    check((STATE / "users").is_dir(), f"{STATE}/users", f"{STATE}/users missing (sudo plm setup)")
+    dest, system = sync_root()
+    check((dest / "prism.json").exists(), f"synced: {dest}", "you haven't run `plm sync` (optional)", fatal=False)
+    active = (load_json(CONFIG, {}) or {}).get("theme", "prism")
+    try:
+        d = find_theme(active, include_user=False)
+        data = load_json(d / "theme.json", None)
+        check(data is not None, f"theme '{active}' ({d})", f"theme '{active}': theme.json isn't valid JSON")
+    except SystemExit:
+        check(False, "", f"active theme '{active}' not found")
+    lua = SHARE / "data" / "compositor" / "hyprland.lua"
+    if have("Hyprland"):
+        r = run(["Hyprland", "--verify-config", "-c", str(lua)])
+        check("config ok" in (r.stdout + r.stderr), "greeter Hyprland config ok", "greeter Hyprland config has errors:\n" + (r.stdout + r.stderr)[-400:])
+    print("\nall good" if ok else "\nsome checks failed")
+    sys.exit(0 if ok else 1)
+
+
+# ---- main -----------------------------------------------------------------------
+
+def main():
+    global SHARE
+    SHARE = share_dir()
+    # installed layout keeps data/ next to shell/; from source it's the repo's data/
+    ap = argparse.ArgumentParser(prog="plm", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("test", help="run the login screen in a window (nothing logs in)")
+    p.add_argument("--theme")
+    p.add_argument("--fullscreen", action="store_true")
+    p.add_argument("--screenshot", help="save a PNG and quit")
+    p.add_argument("--delay", type=int, default=3500, help="ms before the screenshot")
+    p.set_defaults(fn=cmd_test)
+
+    p = sub.add_parser("editor", help="the theme editor")
+    p.add_argument("theme", nargs="?")
+    p.set_defaults(fn=cmd_editor)
+
+    p = sub.add_parser("themes", help="list themes")
+    p.set_defaults(fn=cmd_themes)
+
+    p = sub.add_parser("theme", help="set | install | remove | new | export | import")
+    p.add_argument("theme_args", nargs=argparse.REMAINDER)
+    p.set_defaults(fn=cmd_theme)
+
+    p = sub.add_parser("sync", help="bring your wallpaper, colours and avatar to the login screen")
+    p.add_argument("--wallpaper", help="an image, gif or video (instead of Prism's)")
+    p.add_argument("--avatar")
+    p.add_argument("--auto", action="store_true", help="keep syncing whenever Prism's wallpaper changes")
+    p.add_argument("--no-auto", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(fn=cmd_sync)
+
+    p = sub.add_parser("config", help="show or change plm.json")
+    p.add_argument("key", nargs="?")
+    p.add_argument("value", nargs="?")
+    p.set_defaults(fn=cmd_config)
+
+    p = sub.add_parser("setup", help="set up greetd to use PLM (root)")
+    p.add_argument("--enable", action="store_true", help="also switch to greetd at next boot")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--yes", action="store_true", help="(accepted for scripts; setup never asks)")
+    p.set_defaults(fn=cmd_setup)
+
+    p = sub.add_parser("doctor", help="check the installation")
+    p.set_defaults(fn=cmd_doctor)
+
+    args = ap.parse_args()
+    if not getattr(args, "fn", None):
+        ap.print_help()
+        return 0
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

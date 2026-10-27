@@ -1,0 +1,8 @@
+[Unit]
+Description=PLM: copy the desktop's wallpaper, colours and avatar to the login screen
+
+[Service]
+Type=oneshot
+# Prism writes the palette a moment after the wallpaper changes
+ExecStartPre=/bin/sleep 3
+ExecStart=/usr/bin/plm sync --quiet

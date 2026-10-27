@@ -1,0 +1,34 @@
+{
+    "name": "Terminal",
+    "author": "PLM",
+    "description": "A custom-QML theme: a green phosphor console login. Its whole layout is Main.qml in this folder, built on the `plm` API; use it as a starting point for your own.",
+    "layout": "custom",
+    "main": "Main.qml",
+    "background": {
+        "type": "color",
+        "colors": ["#020603"],
+        "dim": 0
+    },
+    "colors": {
+        "source": "custom",
+        "accent": "#39ff7a",
+        "accent2": "#1fd15c",
+        "accent3": "#b6ffcc",
+        "text": "#9dffbd",
+        "textDim": "#2f9e57",
+        "error": "#ff5f56"
+    },
+    "fonts": {
+        "ui": "Adwaita Mono",
+        "display": "Adwaita Mono",
+        "mono": "Adwaita Mono"
+    },
+    "effects": {
+        "vignette": 0.75,
+        "grain": 0.18,
+        "intro": "fade",
+        "introMs": 600,
+        "outro": "fade",
+        "ambientAfter": 0
+    }
+}

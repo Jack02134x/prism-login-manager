@@ -1,0 +1,10 @@
+[Unit]
+Description=PLM: watch the Prism desktop for a new wallpaper or palette
+
+[Path]
+PathChanged=%h/.config/quickshell/.state/palette.json
+PathChanged=%h/.config/quickshell/.cache/live/current.json
+PathChanged=%h/.face
+
+[Install]
+WantedBy=default.target

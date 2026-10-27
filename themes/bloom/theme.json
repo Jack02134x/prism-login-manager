@@ -1,0 +1,43 @@
+{
+    "name": "Bloom",
+    "author": "PLM",
+    "description": "Soft pink dusk, specks of light drifting down, a rounded glass card.",
+    "layout": "prism",
+    "background": {
+        "type": "gradient",
+        "angle": 160,
+        "dim": 0,
+        "colors": ["#2b1330", "#5a2347", "#f08a9a"]
+    },
+    "colors": {
+        "source": "custom",
+        "accent": "#ffd1dc",
+        "accent2": "#ff9ec4",
+        "accent3": "#ffe3b3",
+        "surface": "#2b0f22",
+        "surfaceAlpha": 0.35,
+        "textDim": "#ffd9e6"
+    },
+    "clock": {
+        "size": 200,
+        "weight": 500,
+        "greeting": true,
+        "uppercaseDate": false,
+        "dateSpacing": 1
+    },
+    "avatar": {
+        "shape": "squircle",
+        "size": 120
+    },
+    "input": {
+        "radius": 18,
+        "mask": "♥"
+    },
+    "effects": {
+        "particles": "snow",
+        "particleCount": 70,
+        "aurora": 0.15,
+        "vignette": 0.35,
+        "intro": "rise"
+    }
+}

@@ -1,0 +1,8 @@
+# greetd config written by `plm setup`. The previous file is kept next to it
+# as config.toml.bak-plm-<date>.
+[terminal]
+vt = 1
+
+[default_session]
+command = "plm-session"
+user = "greeter"

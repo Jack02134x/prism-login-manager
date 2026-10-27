@@ -1,0 +1,42 @@
+{
+    "name": "Aurora",
+    "author": "PLM",
+    "description": "A frosted panel on the left, northern lights and fireflies behind it.",
+    "layout": "glass",
+    "background": {
+        "type": "shader",
+        "shader": "aurora",
+        "dim": 0.05,
+        "parallax": 0.3,
+        "colors": ["#070b14", "#0d1830", "#08202a"]
+    },
+    "colors": {
+        "source": "custom",
+        "accent": "#7ef0c8",
+        "accent2": "#8ab8ff",
+        "accent3": "#c79bff",
+        "surfaceAlpha": 0.3
+    },
+    "panel": {
+        "side": "left",
+        "width": 460,
+        "radius": 32,
+        "blur": 1.0,
+        "opacity": 0.32
+    },
+    "clock": {
+        "size": 190,
+        "weight": 300,
+        "greeting": true
+    },
+    "avatar": {
+        "shape": "squircle"
+    },
+    "effects": {
+        "particles": "fireflies",
+        "particleCount": 50,
+        "vignette": 0.55,
+        "intro": "blur",
+        "introMs": 1400
+    }
+}
